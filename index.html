@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Globe RTS</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="globe-canvas"></canvas>
+
+    <div id="hud">
+      <!-- Top bar: player stats -->
+      <div id="top-bar">
+        <div id="player-stats" class="hud-panel" style="display:none">
+          <div class="stat">
+            <span class="stat-label">Territory</span>
+            <div class="stat-bar-wrap">
+              <div id="territory-bar" class="stat-bar"></div>
+            </div>
+            <span id="territory-pct" class="stat-value">0%</span>
+          </div>
+          <div class="stat-row">
+            <div class="stat-compact">
+              <span class="stat-label">Pop</span>
+              <span id="pop-value" class="stat-value">0</span>
+            </div>
+            <div class="stat-compact">
+              <span class="stat-label">Troops</span>
+              <span id="troops-value" class="stat-value">50</span>
+            </div>
+            <div class="stat-compact">
+              <span class="stat-label">Gold</span>
+              <span id="gold-value" class="stat-value">0</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom panel: controls + info -->
+      <div id="bottom-bar">
+        <div id="controls-panel" class="hud-panel" style="display:none">
+          <div class="slider-group">
+            <label>Troops <span id="troop-ratio-label">60%</span></label>
+            <input type="range" id="troop-ratio" min="10" max="90" value="60" />
+            <span class="slider-hint">Workers ← → Troops</span>
+          </div>
+          <div class="slider-group">
+            <label>Attack <span id="attack-intensity-label">50%</span></label>
+            <input type="range" id="attack-intensity" min="10" max="90" value="50" />
+            <span class="slider-hint">Defend ← → Attack</span>
+          </div>
+        </div>
+
+        <div id="info-panel" class="hud-panel">
+          <span id="tile-info">Click a land tile to spawn your empire</span>
+        </div>
+      </div>
+
+      <!-- Leaderboard -->
+      <div id="leaderboard" class="hud-panel" style="display:none">
+        <div class="leaderboard-title">Leaderboard</div>
+        <div id="leaderboard-list"></div>
+      </div>
+
+      <!-- Victory overlay -->
+      <div id="victory-overlay" style="display:none">
+        <div id="victory-box" class="hud-panel">
+          <div id="victory-title">Victory!</div>
+          <div id="victory-message"></div>
+          <button id="restart-btn" onclick="location.reload()">Play Again</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
