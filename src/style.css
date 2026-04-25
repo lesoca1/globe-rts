@@ -235,3 +235,172 @@ html, body {
 #restart-btn:hover {
   background: #c1303c;
 }
+
+/* ── Start menu ── */
+#start-menu {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 5, 15, 0.55);
+  backdrop-filter: blur(2px);
+  z-index: 200;
+}
+
+.start-box {
+  width: 360px;
+  padding: 28px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.start-title {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-align: center;
+}
+
+.start-subtitle {
+  font-size: 12px;
+  color: #8a8a9a;
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.cfg-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cfg-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #8a8a9a;
+  min-width: 60px;
+}
+
+.cfg-row input[type="text"],
+.cfg-row select {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #e0e0e0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.cfg-row input[type="range"] {
+  flex: 1;
+  accent-color: #e63946;
+}
+
+.cfg-value {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+  text-align: right;
+}
+
+.color-picker {
+  flex: 1;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.color-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: transform 0.1s, border-color 0.1s;
+}
+
+.color-swatch:hover {
+  transform: scale(1.1);
+}
+
+.color-swatch.selected {
+  border-color: #fff;
+}
+
+.start-btn {
+  margin-top: 8px;
+  background: #e63946;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.start-btn:hover {
+  background: #c1303c;
+}
+
+/* ── Countdown overlay ── */
+#countdown-overlay {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 150;
+  pointer-events: none;
+}
+
+.countdown-box {
+  text-align: center;
+  padding: 14px 28px;
+}
+
+.countdown-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #8a8a9a;
+  margin-bottom: 4px;
+}
+
+#countdown-timer {
+  font-size: 44px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #e63946;
+}
+
+/* ── On-globe player name labels ── */
+#name-labels {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 5;
+}
+
+.name-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  transform-origin: 0 0;
+  will-change: transform, opacity;
+}

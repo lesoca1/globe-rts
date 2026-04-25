@@ -32,10 +32,17 @@ export interface Player {
   // Stats
   alive: boolean;
   landTileCount: number;      // cached for performance
+
+  // Running sum of owned-tile centroids; divided by landTileCount yields
+  // the geographic center of the territory, used to position the on-map
+  // nickname label.
+  tileCenterSum: THREE.Vector3;
+  spawned: boolean;
 }
 
-// Predefined player colors — distinct and colorblind-friendly
-const PLAYER_PALETTE: [number, number][] = [
+// Predefined player colors — distinct and colorblind-friendly.
+// Tuple is [main, border-highlight].
+export const PLAYER_PALETTE: [number, number][] = [
   [0xe63946, 0xff6b6b],   // red
   [0x457b9d, 0x6db3d4],   // blue
   [0xe9c46a, 0xf4d98c],   // gold
@@ -46,12 +53,17 @@ const PLAYER_PALETTE: [number, number][] = [
   [0xef476f, 0xf7799a],   // pink
 ];
 
+export function paletteEntry(index: number): [number, number] {
+  return PLAYER_PALETTE[index % PLAYER_PALETTE.length];
+}
+
 export function createPlayer(
   id: number,
   name: string,
-  isHuman: boolean
+  isHuman: boolean,
+  paletteIndex: number = id
 ): Player {
-  const [main, border] = PLAYER_PALETTE[id % PLAYER_PALETTE.length];
+  const [main, border] = paletteEntry(paletteIndex);
   return {
     id,
     name,
@@ -68,5 +80,7 @@ export function createPlayer(
     attackTarget: null,
     alive: true,
     landTileCount: 0,
+    tileCenterSum: new THREE.Vector3(),
+    spawned: false,
   };
 }
