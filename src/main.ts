@@ -34,11 +34,14 @@ controls.maxDistance = GLOBE_RADIUS * 5;
 controls.enablePan = false;
 
 // ── Lighting ──
-const sunLight = new THREE.DirectionalLight(0xffffff, 1.8);
-sunLight.position.set(5, 3, 5);
-scene.add(sunLight);
-scene.add(new THREE.AmbientLight(0x404060, 0.6));
-scene.add(new THREE.HemisphereLight(0x6688cc, 0x443322, 0.4));
+// Key light tracks the camera so the visible hemisphere is always lit
+// (no day/night shadow). Strong ambient + hemisphere fill keeps the
+// silhouette edges from going dark, while flat-shaded normals still
+// give each tile its faceted look.
+const keyLight = new THREE.DirectionalLight(0xffffff, 1.2);
+scene.add(keyLight);
+scene.add(new THREE.AmbientLight(0xffffff, 1.1));
+scene.add(new THREE.HemisphereLight(0xb0c8ff, 0x8a7a66, 0.5));
 
 // ── Globe ──
 console.time("Globe mesh");
@@ -240,6 +243,7 @@ window.addEventListener("resize", () => {
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
+  keyLight.position.copy(camera.position);
   renderer.render(scene, camera);
 }
 
