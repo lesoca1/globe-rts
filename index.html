@@ -9,7 +9,51 @@
   <body>
     <canvas id="globe-canvas"></canvas>
 
-    <div id="hud">
+    <!-- Player-name labels positioned over the globe -->
+    <div id="name-labels"></div>
+
+    <!-- Start menu -->
+    <div id="start-menu">
+      <div class="start-box hud-panel">
+        <h1 class="start-title">Globe RTS</h1>
+        <p class="start-subtitle">Conquer the world, tile by tile.</p>
+
+        <label class="cfg-row">
+          <span class="cfg-label">Name</span>
+          <input id="cfg-name" type="text" maxlength="20" value="Commander" />
+        </label>
+
+        <div class="cfg-row">
+          <span class="cfg-label">Color</span>
+          <div id="cfg-color-picker" class="color-picker"></div>
+        </div>
+
+        <label class="cfg-row">
+          <span class="cfg-label">Globe</span>
+          <select id="cfg-globe">
+            <option value="earth">Earth</option>
+          </select>
+        </label>
+
+        <label class="cfg-row">
+          <span class="cfg-label">Bots</span>
+          <input id="cfg-bots" type="range" min="1" max="100" value="10" />
+          <span id="cfg-bots-val" class="cfg-value">10</span>
+        </label>
+
+        <button id="cfg-start" class="start-btn">Start Game</button>
+      </div>
+    </div>
+
+    <!-- Countdown overlay -->
+    <div id="countdown-overlay" style="display:none">
+      <div class="countdown-box hud-panel">
+        <div class="countdown-label">Pick your starting tile</div>
+        <div id="countdown-timer">5</div>
+      </div>
+    </div>
+
+    <div id="hud" style="display:none">
       <!-- Top bar: player stats -->
       <div id="top-bar">
         <div id="player-stats" class="hud-panel" style="display:none">
@@ -53,7 +97,7 @@
         </div>
 
         <div id="info-panel" class="hud-panel">
-          <span id="tile-info">Click a land tile to spawn your empire</span>
+          <span id="tile-info">Right-click drag to spin · Left-click a land tile to spawn</span>
         </div>
       </div>
 

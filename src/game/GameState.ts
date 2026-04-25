@@ -1,6 +1,10 @@
 import * as THREE from "three";
 import { type Tile, paintTile, TERRAIN_COLORS } from "../globe/TileData";
-import { type Player, createPlayer } from "./Player";
+import {
+  type Player,
+  createPlayer,
+  PLAYER_PALETTE,
+} from "./Player";
 
 // ─────────────────────────────────────────────
 // GameState.ts
@@ -8,16 +12,29 @@ import { type Player, createPlayer } from "./Player";
 // combat, resources, and win conditions.
 // ─────────────────────────────────────────────
 
-export type GamePhase = "spawning" | "playing" | "victory";
+export type GamePhase = "menu" | "countdown" | "playing" | "victory";
 
-// Terrain capture costs (in troops)
+export interface GameConfig {
+  playerName: string;
+  playerPaletteIndex: number;
+  botCount: number;
+  // (Reserved for future use: globe selection, etc.)
+}
+
+// Terrain capture costs (in troops).
+// Naval troops aren't implemented yet, so all water is impassable —
+// expansion is strictly land-only.
 const TERRAIN_COST: Record<string, number> = {
-  deep_water: Infinity,   // can't capture ocean
-  shallow_water: 8,
+  deep_water: Infinity,
+  shallow_water: Infinity,
   plains: 1,
   hills: 3,
   mountains: 6,
 };
+
+function isLand(terrain: string): boolean {
+  return terrain !== "deep_water" && terrain !== "shallow_water";
+}
 
 // How fast population grows per owned land tile per tick
 const POP_GROWTH_RATE = 0.015;
@@ -28,49 +45,139 @@ const TROOPS_PER_EXPAND = 1.5;
 
 const WIN_THRESHOLD = 0.80;  // 80% of land to win
 
+const COUNTDOWN_DURATION_MS = 5000;
+
 export class GameState {
   tiles: Tile[];
   geometry: THREE.BufferGeometry;
   players: Player[] = [];
-  phase: GamePhase = "spawning";
+  phase: GamePhase = "menu";
   totalLandTiles: number = 0;
   winner: Player | null = null;
   tickCount: number = 0;
 
+  // Countdown state
+  countdownRemainingMs: number = 0;
+  private countdownStartTime: number = 0;
+
   // Callbacks for UI updates
   onStateChange: (() => void) | null = null;
   onVictory: ((winner: Player) => void) | null = null;
+  onCountdownTick: ((secondsRemaining: number) => void) | null = null;
+  onCountdownEnd: (() => void) | null = null;
 
   private tickInterval: number | null = null;
+  private countdownInterval: number | null = null;
+  private countdownTimeout: number | null = null;
+
+  // Cached land-tile pool used for finding bot spawn locations.
+  private landSpawnPool: Tile[] | null = null;
 
   constructor(tiles: Tile[], geometry: THREE.BufferGeometry) {
     this.tiles = tiles;
     this.geometry = geometry;
-    this.totalLandTiles = tiles.filter(
-      (t) => t.terrain !== "deep_water"
-    ).length;
+    this.totalLandTiles = tiles.filter((t) => isLand(t.terrain)).length;
   }
 
   // ── Setup ──
 
-  /** Add AI players and spawn them on random land tiles */
-  setupAI(count: number): void {
-    for (let i = 1; i <= count; i++) {
-      const ai = createPlayer(i, `Bot ${i}`, false);
-      this.players.push(ai);
-      this.spawnPlayer(ai, this.findSpawnLocation(ai));
+  /** Initialize players from config. Bots aren't spawned until countdown begins. */
+  setupGame(config: GameConfig): void {
+    this.players = [];
+
+    const human = createPlayer(
+      0,
+      config.playerName || "You",
+      true,
+      config.playerPaletteIndex
+    );
+    this.players.push(human);
+
+    // Assign bot palette indices, skipping the human's choice when possible.
+    const used = new Set<number>([config.playerPaletteIndex]);
+    let next = 0;
+    for (let i = 1; i <= config.botCount; i++) {
+      while (used.has(next % PLAYER_PALETTE.length) &&
+             used.size < PLAYER_PALETTE.length) {
+        next++;
+      }
+      const palIdx = next % PLAYER_PALETTE.length;
+      used.add(palIdx);
+      next++;
+      if (used.size >= PLAYER_PALETTE.length) {
+        // Palette exhausted — let further bots cycle through colors freely.
+        used.clear();
+        used.add(config.playerPaletteIndex);
+      }
+      this.players.push(createPlayer(i, `Bot ${i}`, false, palIdx));
     }
+  }
+
+  /** Begin the 5-second freeze. Bots spawn now; the human can click to spawn. */
+  startCountdown(): void {
+    if (this.phase !== "menu") return;
+    this.phase = "countdown";
+
+    // Pre-build the spawn pool once for performance with many bots.
+    this.landSpawnPool = this.tiles.filter(
+      (t) => t.terrain === "plains" && t.owner === null
+    );
+
+    // All bots pick locations immediately.
+    for (const p of this.players) {
+      if (p.isHuman) continue;
+      this.spawnPlayer(p, this.findSpawnLocation(p));
+    }
+
+    this.countdownStartTime = performance.now();
+    this.countdownRemainingMs = COUNTDOWN_DURATION_MS;
+
+    // Tick the visible timer at 100 ms granularity.
+    this.countdownInterval = window.setInterval(() => {
+      const elapsed = performance.now() - this.countdownStartTime;
+      this.countdownRemainingMs = Math.max(0, COUNTDOWN_DURATION_MS - elapsed);
+      this.onCountdownTick?.(this.countdownRemainingMs / 1000);
+    }, 100);
+
+    this.countdownTimeout = window.setTimeout(
+      () => this.endCountdown(),
+      COUNTDOWN_DURATION_MS
+    );
+
+    this.onCountdownTick?.(COUNTDOWN_DURATION_MS / 1000);
+  }
+
+  /** End the countdown: auto-spawn the human if they didn't pick, then play. */
+  private endCountdown(): void {
+    if (this.phase !== "countdown") return;
+
+    if (this.countdownInterval !== null) {
+      clearInterval(this.countdownInterval);
+      this.countdownInterval = null;
+    }
+    if (this.countdownTimeout !== null) {
+      clearTimeout(this.countdownTimeout);
+      this.countdownTimeout = null;
+    }
+
+    const human = this.getHuman();
+    if (human && !human.spawned) {
+      this.spawnPlayer(human, this.findSpawnLocation(human));
+    }
+
+    this.phase = "playing";
+    this.onCountdownEnd?.();
+    this.startGameLoop();
   }
 
   /** Find a good spawn point: land tile far from other players */
   private findSpawnLocation(player: Player): number {
-    const landTiles = this.tiles.filter(
+    const landTiles = this.landSpawnPool ?? this.tiles.filter(
       (t) => t.terrain === "plains" && t.owner === null
     );
     if (landTiles.length === 0) return -1;
 
-    // Score each tile by distance to nearest other player
-    let bestTile = landTiles[0];
+    let bestTile = landTiles[Math.floor(Math.random() * landTiles.length)];
     let bestScore = -1;
 
     // Sample to avoid O(n²) with 300K+ tiles
@@ -79,6 +186,7 @@ export class GameState {
 
     for (let i = 0; i < landTiles.length; i += step) {
       const tile = landTiles[i];
+      if (tile.owner !== null) continue;
       let minDist = Infinity;
 
       for (const other of this.players) {
@@ -114,7 +222,7 @@ export class GameState {
       visited.add(idx);
 
       const tile = this.tiles[idx];
-      if (tile.terrain === "deep_water" || tile.owner !== null) continue;
+      if (!isLand(tile.terrain) || tile.owner !== null) continue;
 
       this.claimTile(player, idx);
       claimed++;
@@ -125,21 +233,21 @@ export class GameState {
       }
     }
 
+    player.spawned = claimed > 0;
     this.updateBorderTiles(player);
   }
 
-  /** Human player spawns by clicking */
+  /** Human player spawns by clicking a land tile during the countdown. */
   handleSpawnClick(tileIndex: number): Player | null {
+    if (this.phase !== "countdown") return null;
     const tile = this.tiles[tileIndex];
-    if (tile.terrain === "deep_water" || tile.owner !== null) return null;
+    if (!isLand(tile.terrain) || tile.owner !== null) return null;
 
-    const human = createPlayer(0, "You", true);
-    this.players.unshift(human); // human is always index 0
+    const human = this.getHuman();
+    if (!human || human.spawned) return null;
+
     this.spawnPlayer(human, tileIndex);
-
-    this.phase = "playing";
-    this.startGameLoop();
-
+    human.attackTarget = null;
     return human;
   }
 
@@ -255,9 +363,7 @@ export class GameState {
           const defense = cost * 1.5;
           if (troopsSpent + defense > maxSpend) continue;
 
-          defender.ownedTiles.delete(tileIdx);
-          defender.borderTiles.delete(tileIdx);
-          defender.landTileCount--;
+          this.releaseTile(defender, tileIdx);
           troopsSpent += defense;
         }
       }
@@ -296,12 +402,24 @@ export class GameState {
     const tile = this.tiles[tileIdx];
     tile.owner = player.id;
     player.ownedTiles.add(tileIdx);
-    if (tile.terrain !== "deep_water") {
+    if (isLand(tile.terrain)) {
       player.landTileCount++;
+      player.tileCenterSum.add(tile.centroid);
     }
 
     // Paint the tile
     paintTile(this.geometry, tileIdx, player.color);
+  }
+
+  private releaseTile(player: Player, tileIdx: number): void {
+    const tile = this.tiles[tileIdx];
+    if (!player.ownedTiles.has(tileIdx)) return;
+    player.ownedTiles.delete(tileIdx);
+    player.borderTiles.delete(tileIdx);
+    if (isLand(tile.terrain)) {
+      player.landTileCount--;
+      player.tileCenterSum.sub(tile.centroid);
+    }
   }
 
   /** Recalculate which of a player's tiles are on the border */
