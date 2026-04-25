@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createGlobeMesh, GLOBE_RADIUS } from "./globe/GlobeMesh";
 import { buildTiles, buildAdjacency, paintTile } from "./globe/TileData";
+import { loadEarthData } from "./globe/EarthData";
 import { pickTile } from "./input/Raycaster";
 import { GameState } from "./game/GameState";
 import { runAI } from "./game/AI";
@@ -50,8 +51,12 @@ scene.add(globeMesh);
 console.timeEnd("Globe mesh");
 
 // ── Tile data ──
+console.time("Load Earth maps");
+const earth = await loadEarthData();
+console.timeEnd("Load Earth maps");
+
 console.time("Build tiles");
-const tiles = buildTiles(globeMesh.geometry);
+const tiles = buildTiles(globeMesh.geometry, earth);
 console.timeEnd("Build tiles");
 
 console.time("Build adjacency");

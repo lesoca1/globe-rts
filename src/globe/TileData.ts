@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { type EarthData, sample } from "./EarthData";
 
 export type Terrain = "deep_water" | "shallow_water" | "plains" | "hills" | "mountains";
 
@@ -21,7 +22,10 @@ const TERRAIN_COLORS: Record<Terrain, THREE.Color> = {
   mountains:     new THREE.Color(0x9c9080),
 };
 
-export function buildTiles(geometry: THREE.BufferGeometry): Tile[] {
+export function buildTiles(
+  geometry: THREE.BufferGeometry,
+  earth: EarthData
+): Tile[] {
   const pos = geometry.attributes.position;
   const colorAttr = geometry.attributes.color;
   const tileCount = pos.count / 3;
@@ -43,7 +47,7 @@ export function buildTiles(geometry: THREE.BufferGeometry): Tile[] {
     const latDeg = THREE.MathUtils.radToDeg(latRad);
     const lonDeg = THREE.MathUtils.radToDeg(lonRad);
 
-    const terrain = classifyTerrain(latDeg, lonDeg);
+    const terrain = classifyTerrain(latDeg, lonDeg, earth);
 
     const color = TERRAIN_COLORS[terrain];
     for (let v = 0; v < 3; v++) {
@@ -66,31 +70,30 @@ export function buildTiles(geometry: THREE.BufferGeometry): Tile[] {
   return tiles;
 }
 
-function classifyTerrain(lat: number, lon: number): Terrain {
-  const la = lat * (Math.PI / 180);
-  const lo = lon * (Math.PI / 180);
+// Coastal halo ~1.5° (~165 km) — within this range of land we call it
+// shallow water. 3×3 sample stencil keeps the per-tile cost bounded.
+const COAST_HALO_DEG = 1.5;
 
-  let elevation =
-    Math.sin(la * 2.0 + 0.5) * 0.4 +
-    Math.sin(lo * 1.5 + 1.0) * 0.3 +
-    Math.sin(la * 3.0 + lo * 2.0) * 0.25;
+function classifyTerrain(lat: number, lon: number, earth: EarthData): Terrain {
+  // Water mask: white (>128) = water, black = land.
+  const water = sample(earth.water, lon, lat);
 
-  elevation +=
-    Math.sin(la * 5.0 + lo * 4.0 + 2.0) * 0.15 +
-    Math.sin(la * 4.0 - lo * 3.0) * 0.1;
-
-  elevation +=
-    Math.sin(la * 10.0 + lo * 8.0 + 1.5) * 0.07 +
-    Math.sin(la * 8.0 - lo * 6.0 + 3.0) * 0.05;
-
-  if (Math.abs(lat) > 75) {
-    elevation -= 0.3;
+  if (water > 128) {
+    for (const dLat of [-COAST_HALO_DEG, 0, COAST_HALO_DEG]) {
+      for (const dLon of [-COAST_HALO_DEG, 0, COAST_HALO_DEG]) {
+        if (sample(earth.water, lon + dLon, lat + dLat) <= 128) {
+          return "shallow_water";
+        }
+      }
+    }
+    return "deep_water";
   }
 
-  if (elevation < -0.15) return "deep_water";
-  if (elevation < 0.05) return "shallow_water";
-  if (elevation < 0.35) return "plains";
-  if (elevation < 0.55) return "hills";
+  // Land: classify by relief brightness. Topology image is dark overall;
+  // ranges chosen empirically — most plains are <30, alpine ridges >80.
+  const elev = sample(earth.topology, lon, lat);
+  if (elev < 30) return "plains";
+  if (elev < 80) return "hills";
   return "mountains";
 }
 
