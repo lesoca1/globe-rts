@@ -42,7 +42,10 @@ export async function loadEarthData(): Promise<EarthData> {
 
 /** Sample the red channel at (lonDeg, latDeg). Wraps in longitude, clamps lat. */
 export function sample(map: EarthMap, lonDeg: number, latDeg: number): number {
-  let u = (lonDeg + 180) / 360;
+  // U is inverted: viewing the sphere from outside, east on the texture
+  // (right) corresponds to the -Z hemisphere, so we flip lon to keep the
+  // continents from rendering as their mirror image.
+  let u = (180 - lonDeg) / 360;
   u = u - Math.floor(u); // wrap
   let v = (90 - latDeg) / 180;
   if (v < 0) v = 0;
