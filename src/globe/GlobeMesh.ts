@@ -1,6 +1,6 @@
 import * as THREE from "three";
 
-const SUBDIVISION_LEVEL = 7;
+const SUBDIVISION_LEVEL = 8;
 const GLOBE_RADIUS = 5;
 
 export function createGlobeMesh(): THREE.Mesh {
