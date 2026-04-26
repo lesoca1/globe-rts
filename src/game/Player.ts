@@ -1,9 +1,11 @@
 import * as THREE from "three";
+import { type Attack } from "./Attack";
 
 // ─────────────────────────────────────────────
 // Player.ts
 // Each player (human or AI) has territory,
-// population, gold, and control sliders.
+// a troop pool (P), gold, control sliders,
+// and a list of active attacks.
 // ─────────────────────────────────────────────
 
 export interface Player {
@@ -19,15 +21,15 @@ export interface Player {
 
   // Resources
   population: number;
-  troops: number;
+  troops: number;             // P — total troop pool
   gold: number;
 
   // Control sliders (0–1)
   troopRatio: number;         // what fraction of pop growth goes to troops (vs workers)
-  attackIntensity: number;    // what fraction of border troops to use per expansion tick
+  attackIntensity: number;    // fraction of P committed across all active attacks per tick
 
-  // Attack target: if set, expansion prioritizes tiles near this target
-  attackTarget: number | null;  // player ID to focus attacks on
+  // Active tick-based attacks owned by this player.
+  attacks: Attack[];
 
   // Stats
   alive: boolean;
@@ -77,7 +79,7 @@ export function createPlayer(
     gold: 0,
     troopRatio: 0.6,   // 60% troops, 40% workers by default
     attackIntensity: 0.5,
-    attackTarget: null,
+    attacks: [],
     alive: true,
     landTileCount: 0,
     tileCenterSum: new THREE.Vector3(),

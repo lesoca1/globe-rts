@@ -3,6 +3,8 @@ import { type EarthData, sample } from "./EarthData";
 
 export type Terrain = "deep_water" | "shallow_water" | "plains" | "hills" | "mountains";
 
+// Defensive troop value applied to terrain on claim/capture.
+// (`troops` on the tile is a holdover; new code uses `defense` / D.)
 export interface Tile {
   index: number;
   centroid: THREE.Vector3;
@@ -12,7 +14,26 @@ export interface Tile {
   neighbors: number[];
   owner: number | null;
   troops: number;
+
+  // ── Defense model ──
+  // D — defensive troop value stationed on the tile (depleted by attacks).
+  defense: number;
+  // Td — terrain defense multiplier (constant per terrain).
+  terrainDefense: number;
+  // Sd — structure defense multiplier (1.0 until structures are built).
+  structureDefense: number;
 }
+
+// Defensive multiplier applied by the terrain itself.
+// Mountains and hills are easier to defend; water is treated as 1.0
+// because naval combat isn't modeled yet (water tiles stay impassable).
+export const TERRAIN_DEFENSE: Record<Terrain, number> = {
+  deep_water:    1.0,
+  shallow_water: 1.0,
+  plains:        1.0,
+  hills:         1.6,
+  mountains:     2.5,
+};
 
 const TERRAIN_COLORS: Record<Terrain, THREE.Color> = {
   deep_water:    new THREE.Color(0x1a3a5c),
@@ -63,6 +84,9 @@ export function buildTiles(
       neighbors: [],
       owner: null,
       troops: 0,
+      defense: 0,
+      terrainDefense: TERRAIN_DEFENSE[terrain],
+      structureDefense: 1.0,
     });
   }
 

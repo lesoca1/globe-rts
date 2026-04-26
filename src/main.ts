@@ -8,6 +8,7 @@ import { pickTile } from "./input/Raycaster";
 import { GameState } from "./game/GameState";
 import { runAI } from "./game/AI";
 import { PLAYER_PALETTE } from "./game/Player";
+import { AttackIndicators } from "./render/AttackIndicators";
 
 // ── Renderer ──
 const canvas = document.getElementById("globe-canvas") as HTMLCanvasElement;
@@ -118,9 +119,12 @@ window.addEventListener("resize", () => {
 
 // ── Render loop ──
 const labelContainer = document.getElementById("name-labels")!;
+const attackLayer = document.getElementById("attack-indicators") as HTMLDivElement;
 const labelMap = new Map<number, HTMLDivElement>();
 const projectedPos = new THREE.Vector3();
 const cameraDir = new THREE.Vector3();
+
+const attackIndicators = new AttackIndicators(scene, attackLayer, game, camera);
 
 function updateLabels() {
   if (game.phase === "menu") return;
@@ -183,6 +187,7 @@ function animate() {
   controls.update();
   keyLight.position.copy(camera.position);
   updateLabels();
+  attackIndicators.update();
   renderer.render(scene, camera);
 }
 
@@ -389,7 +394,6 @@ canvas.addEventListener("click", (event) => {
     const result = game.handleSpawnClick(tileIndex);
     if (result) {
       tileInfoEl.textContent = "Empire founded — waiting for the world to unfreeze…";
-      result.attackTarget = null;
       selectedTile = -1;
       return;
     } else {
@@ -404,11 +408,22 @@ canvas.addEventListener("click", (event) => {
 
   const human = game.getHuman();
   if (human && tile.owner !== null && tile.owner !== human.id) {
-    human.attackTarget = tile.owner;
+    // Toggle: if we're already attacking this tile, cancel; else launch.
+    const alreadyAttacking = human.attacks.some(
+      (a) => a.targetTileIndex === tileIndex
+    );
     const target = game.players.find((p) => p.id === tile.owner);
-    tileInfoEl.textContent = `Attacking ${target?.name || "unknown"}!`;
+    const targetName = target?.name || "unknown";
+
+    if (alreadyAttacking) {
+      game.cancelAttack(human, tileIndex);
+      tileInfoEl.textContent = `Cancelled attack on ${targetName}.`;
+    } else if (game.requestAttack(human, tileIndex)) {
+      tileInfoEl.textContent = `Attack launched on ${targetName}.`;
+    } else {
+      tileInfoEl.textContent = `Can't attack ${targetName} — no adjacent border.`;
+    }
   } else if (human && tile.owner === human.id) {
-    human.attackTarget = null;
     tileInfoEl.textContent = `Your tile  |  ${tile.terrain.replace("_", " ")}`;
   } else {
     tileInfoEl.textContent =
