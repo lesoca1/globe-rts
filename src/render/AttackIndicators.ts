@@ -34,6 +34,13 @@ export class AttackIndicators {
   // Keyed by `${attackerId}:${defenderId}` for stable identity per campaign.
   private entries = new Map<string, IndicatorEntry>();
   private projected = new THREE.Vector3();
+  private start = new THREE.Vector3();
+  private end = new THREE.Vector3();
+  private mid = new THREE.Vector3();
+  private point = new THREE.Vector3();
+  private tangent = new THREE.Vector3();
+  private cameraDir = new THREE.Vector3();
+  private ndc = new THREE.Vector3();
 
   constructor(
     scene: THREE.Scene,
@@ -109,6 +116,7 @@ export class AttackIndicators {
     });
     const line = new THREE.Line(lineGeom, lineMat);
     line.renderOrder = 999;
+    line.frustumCulled = false;
     this.group.add(line);
 
     const headGeom = new THREE.ConeGeometry(
@@ -124,6 +132,7 @@ export class AttackIndicators {
     });
     const head = new THREE.Mesh(headGeom, headMat);
     head.renderOrder = 1000;
+    head.frustumCulled = false;
     this.group.add(head);
 
     const label = document.createElement("div");
@@ -140,38 +149,47 @@ export class AttackIndicators {
     const fromTile = this.game.tiles[entry.attack.fromTileIndex];
     const toTile = this.game.tiles[entry.attack.toTileIndex];
 
-    const start = fromTile.centroid.clone().normalize().multiplyScalar(ARROW_RADIUS);
-    const end = toTile.centroid.clone().normalize().multiplyScalar(ARROW_RADIUS);
-
-    // Mid-point lifted slightly above the globe to give the arrow an arc.
-    const mid = start
-      .clone()
-      .add(end)
+    this.start.copy(fromTile.centroid).normalize().multiplyScalar(ARROW_RADIUS);
+    this.end.copy(toTile.centroid).normalize().multiplyScalar(ARROW_RADIUS);
+    this.mid
+      .copy(this.start)
+      .add(this.end)
       .multiplyScalar(0.5)
       .normalize()
       .multiplyScalar(ARROW_RADIUS * (1 + ARC_LIFT));
-
-    const curve = new THREE.QuadraticBezierCurve3(start, mid, end);
     const positions = (
       entry.line.geometry.attributes.position as THREE.BufferAttribute
     ).array as Float32Array;
 
-    let lastPoint = start;
+    let lastX = this.start.x;
+    let lastY = this.start.y;
+    let lastZ = this.start.z;
     for (let i = 0; i < ARROW_SEGMENTS; i++) {
-      const p = curve.getPoint(i / (ARROW_SEGMENTS - 1));
-      positions[i * 3] = p.x;
-      positions[i * 3 + 1] = p.y;
-      positions[i * 3 + 2] = p.z;
-      if (i === ARROW_SEGMENTS - 2) lastPoint = p;
+      const t = i / (ARROW_SEGMENTS - 1);
+      const oneMinusT = 1 - t;
+      this.point
+        .copy(this.start)
+        .multiplyScalar(oneMinusT * oneMinusT)
+        .addScaledVector(this.mid, 2 * oneMinusT * t)
+        .addScaledVector(this.end, t * t);
+
+      positions[i * 3] = this.point.x;
+      positions[i * 3 + 1] = this.point.y;
+      positions[i * 3 + 2] = this.point.z;
+      if (i === ARROW_SEGMENTS - 2) {
+        lastX = this.point.x;
+        lastY = this.point.y;
+        lastZ = this.point.z;
+      }
     }
     entry.line.geometry.attributes.position.needsUpdate = true;
-    entry.line.geometry.computeBoundingSphere();
 
     // Orient the arrow head along the tangent at the end of the curve.
-    entry.head.position.copy(end);
-    const tangent = end.clone().sub(lastPoint).normalize();
-    const up = new THREE.Vector3(0, 1, 0);
-    entry.head.quaternion.setFromUnitVectors(up, tangent);
+    entry.head.position.copy(this.end);
+    this.tangent
+      .set(this.end.x - lastX, this.end.y - lastY, this.end.z - lastZ)
+      .normalize();
+    entry.head.quaternion.setFromUnitVectors(THREE.Object3D.DEFAULT_UP, this.tangent);
   }
 
   private updateLabel(entry: IndicatorEntry, player: Player): void {
@@ -186,21 +204,21 @@ export class AttackIndicators {
       .normalize()
       .multiplyScalar(GLOBE_RADIUS * (1 + ARC_LIFT * 1.4));
 
-    const cameraDir = this.camera.position.clone().normalize();
-    const facing = this.projected.clone().normalize().dot(cameraDir);
+    this.cameraDir.copy(this.camera.position).normalize();
+    const facing = this.projected.normalize().dot(this.cameraDir);
     if (facing < 0.05) {
       entry.label.style.display = "none";
       return;
     }
 
-    const ndc = this.projected.clone().project(this.camera);
-    if (ndc.z > 1 || ndc.z < -1) {
+    this.ndc.copy(this.projected).project(this.camera);
+    if (this.ndc.z > 1 || this.ndc.z < -1) {
       entry.label.style.display = "none";
       return;
     }
 
-    const x = (ndc.x * 0.5 + 0.5) * window.innerWidth;
-    const y = (-ndc.y * 0.5 + 0.5) * window.innerHeight;
+    const x = (this.ndc.x * 0.5 + 0.5) * window.innerWidth;
+    const y = (-this.ndc.y * 0.5 + 0.5) * window.innerHeight;
 
     // Show the troop pool committed to this campaign.
     const troops = Math.max(0, Math.floor(entry.attack.troops));

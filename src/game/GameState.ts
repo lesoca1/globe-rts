@@ -20,6 +20,7 @@ const DEFENSE_DEBUFF_MIDPOINT = 150_000;
 const DEFENSE_DEBUFF_DECAY_RATE = Math.LN2 / 50_000;
 const HUMAN_GOLD_PER_TICK = 100;
 const BOT_GOLD_PER_TICK = 50;
+const MAX_ATTACK_STEPS_PER_TICK = 8;
 
 function isLand(terrain: string): boolean {
   return terrain !== "deep_water" && terrain !== "shallow_water";
@@ -47,7 +48,8 @@ function terrainAttackProfile(tile: Tile): { mag: number; speed: number } {
 }
 
 type FrontInfo = {
-  targets: number[];
+  targetCount: number;
+  bestTargetIndex: number;
   representativeFrom: number;
   representativeTo: number;
 };
@@ -72,6 +74,7 @@ export class GameState {
   private countdownInterval: number | null = null;
   private countdownTimeout: number | null = null;
   private landSpawnPool: number[] = [];
+  private playersById = new Map<number, Player>();
 
   constructor(tiles: Tile[], geometry: THREE.BufferGeometry) {
     this.tiles = tiles;
@@ -81,6 +84,7 @@ export class GameState {
 
   setupGame(config: GameConfig): void {
     this.players = [];
+    this.playersById.clear();
 
     const human = createPlayer(
       0,
@@ -89,6 +93,7 @@ export class GameState {
       config.playerPaletteIndex
     );
     this.players.push(human);
+    this.playersById.set(human.id, human);
 
     const used = new Set<number>([config.playerPaletteIndex]);
     let nextPalette = 0;
@@ -106,7 +111,9 @@ export class GameState {
         used.clear();
         used.add(config.playerPaletteIndex);
       }
-      this.players.push(createPlayer(i, `Bot ${i}`, false, paletteIndex));
+      const bot = createPlayer(i, `Bot ${i}`, false, paletteIndex);
+      this.players.push(bot);
+      this.playersById.set(bot.id, bot);
     }
   }
 
@@ -357,9 +364,10 @@ export class GameState {
 
       let refunded = false;
 
-      while (attack.troops >= 1) {
+      let attackSteps = 0;
+      while (attack.troops >= 1 && attackSteps < MAX_ATTACK_STEPS_PER_TICK) {
         const front = this.computeFront(player, attack);
-        if (front.targets.length === 0) {
+        if (front.targetCount === 0) {
           player.troops = Math.min(this.maxTroops(player), player.troops + attack.troops);
           refunded = true;
           break;
@@ -371,15 +379,15 @@ export class GameState {
         const defender =
           attack.defenderId === null
             ? null
-            : this.players.find((candidate) => candidate.id === attack.defenderId) ?? null;
+            : this.playersById.get(attack.defenderId) ?? null;
         let tilesBudget = this.attackTilesPerTick(
           attack.troops,
           defender,
-          front.targets.length
+          front.targetCount
         );
         if (tilesBudget <= 0) break;
 
-        const targetIndex = this.pickFrontierTarget(player, front.targets);
+        const targetIndex = front.bestTargetIndex;
         if (targetIndex < 0) break;
 
         const tile = this.tiles[targetIndex];
@@ -393,6 +401,7 @@ export class GameState {
 
         this.captureTile(player, targetIndex);
         tilesBudget -= resolution.tilesPerTickUsed;
+        attackSteps++;
         if (tilesBudget <= 0) break;
       }
 
@@ -483,7 +492,9 @@ export class GameState {
   }
 
   private computeFront(player: Player, attack: Attack): FrontInfo {
-    const targets = new Set<number>();
+    const seenTargets = new Set<number>();
+    let bestTargetIndex = -1;
+    let bestScore = Infinity;
     let representativeFrom = attack.fromTileIndex;
     let representativeTo = attack.toTileIndex;
     let hasAnchor = false;
@@ -500,50 +511,46 @@ export class GameState {
           continue;
         }
 
-        if (!targets.has(neighborIndex)) {
-          targets.add(neighborIndex);
+        if (!seenTargets.has(neighborIndex)) {
+          seenTargets.add(neighborIndex);
           if (!hasAnchor) {
             representativeFrom = borderIndex;
             representativeTo = neighborIndex;
             hasAnchor = true;
+          }
+
+          const score = this.scoreFrontierTarget(player, neighborIndex);
+          if (score < bestScore) {
+            bestScore = score;
+            bestTargetIndex = neighborIndex;
           }
         }
       }
     }
 
     return {
-      targets: Array.from(targets),
+      targetCount: seenTargets.size,
+      bestTargetIndex,
       representativeFrom,
       representativeTo,
     };
   }
 
-  private pickFrontierTarget(player: Player, targets: number[]): number {
-    let bestIndex = -1;
-    let bestScore = Infinity;
-
-    for (const targetIndex of targets) {
-      const tile = this.tiles[targetIndex];
-      const terrainPenalty =
-        tile.terrain === "plains" ? 1 : tile.terrain === "hills" ? 1.5 : 2;
-      let ownedNeighbors = 0;
-      for (const neighborIndex of tile.neighbors) {
-        if (this.tiles[neighborIndex].owner === player.id) {
-          ownedNeighbors++;
-        }
-      }
-
-      const score =
-        (10 + ((targetIndex + this.tickCount) % 7)) *
-        (1 - ownedNeighbors * 0.5 + terrainPenalty / 2);
-
-      if (score < bestScore) {
-        bestScore = score;
-        bestIndex = targetIndex;
+  private scoreFrontierTarget(player: Player, targetIndex: number): number {
+    const tile = this.tiles[targetIndex];
+    const terrainPenalty =
+      tile.terrain === "plains" ? 1 : tile.terrain === "hills" ? 1.5 : 2;
+    let ownedNeighbors = 0;
+    for (const neighborIndex of tile.neighbors) {
+      if (this.tiles[neighborIndex].owner === player.id) {
+        ownedNeighbors++;
       }
     }
 
-    return bestIndex;
+    return (
+      (10 + ((targetIndex + this.tickCount) % 7)) *
+      (1 - ownedNeighbors * 0.5 + terrainPenalty / 2)
+    );
   }
 
   requestAttack(attacker: Player, targetTileIdx: number): boolean {
@@ -637,7 +644,7 @@ export class GameState {
     attackerId: number,
     newAttack: Attack
   ): void {
-    const defender = this.players.find((player) => player.id === defenderId);
+    const defender = this.playersById.get(defenderId);
     if (!defender) return;
 
     const counterAttack = defender.attacks.find((attack) => attack.defenderId === attackerId);
@@ -707,19 +714,35 @@ export class GameState {
 
   private captureTile(attacker: Player, tileIdx: number): void {
     const tile = this.tiles[tileIdx];
+    const affectedTileIndices = [tileIdx, ...tile.neighbors];
+    const affectedPlayerIds = new Set<number>([attacker.id]);
+    for (const affectedIndex of affectedTileIndices) {
+      const ownerId = this.tiles[affectedIndex].owner;
+      if (ownerId !== null) {
+        affectedPlayerIds.add(ownerId);
+      }
+    }
+
     const previousOwner =
       tile.owner !== null
-        ? this.players.find((player) => player.id === tile.owner) ?? null
+        ? this.playersById.get(tile.owner) ?? null
         : null;
 
     if (previousOwner) {
+      affectedPlayerIds.add(previousOwner.id);
       this.releaseTile(previousOwner, tileIdx);
     }
 
     this.claimTile(attacker, tileIdx);
-    this.updateBorderTiles(attacker);
-    if (previousOwner) {
-      this.updateBorderTiles(previousOwner);
+
+    for (const playerId of affectedPlayerIds) {
+      const player = this.playersById.get(playerId);
+      if (!player) continue;
+      for (const affectedIndex of affectedTileIndices) {
+        if (this.tiles[affectedIndex].owner === playerId) {
+          this.recomputeBorderTile(player, affectedIndex);
+        }
+      }
     }
   }
 
@@ -734,6 +757,29 @@ export class GameState {
           break;
         }
       }
+    }
+  }
+
+  private recomputeBorderTile(player: Player, tileIndex: number): void {
+    if (this.tiles[tileIndex].owner !== player.id) {
+      player.borderTiles.delete(tileIndex);
+      return;
+    }
+
+    let isBorder = false;
+    for (const neighborIndex of this.tiles[tileIndex].neighbors) {
+      if (this.tiles[neighborIndex].owner !== player.id) {
+        isBorder = true;
+        break;
+      }
+    }
+
+    if (isBorder) {
+      player.borderTiles.add(tileIndex);
+      paintTile(this.geometry, tileIndex, player.borderColor);
+    } else {
+      player.borderTiles.delete(tileIndex);
+      paintTile(this.geometry, tileIndex, player.color);
     }
   }
 
