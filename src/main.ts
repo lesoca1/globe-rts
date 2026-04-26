@@ -252,27 +252,18 @@ const territoryPct = document.getElementById("territory-pct")!;
 const troopsValue = document.getElementById("troops-value")!;
 const capValue = document.getElementById("cap-value")!;
 const goldValue = document.getElementById("gold-value")!;
-const troopRatioSlider = document.getElementById("troop-ratio") as HTMLInputElement;
-const troopRatioLabel = document.getElementById("troop-ratio-label")!;
-const attackSlider = document.getElementById("attack-intensity") as HTMLInputElement;
-const attackLabel = document.getElementById("attack-intensity-label")!;
+const attackAllocationSlider = document.getElementById("attack-allocation") as HTMLInputElement;
+const attackAllocationLabel = document.getElementById("attack-allocation-label")!;
 const victoryOverlay = document.getElementById("victory-overlay")!;
 const victoryMessage = document.getElementById("victory-message")!;
 const countdownOverlay = document.getElementById("countdown-overlay")!;
 const countdownTimerEl = document.getElementById("countdown-timer")!;
 
-troopRatioSlider.addEventListener("input", () => {
-  const val = parseInt(troopRatioSlider.value) / 100;
-  troopRatioLabel.textContent = `${troopRatioSlider.value}%`;
+attackAllocationSlider.addEventListener("input", () => {
+  const val = parseInt(attackAllocationSlider.value) / 100;
+  attackAllocationLabel.textContent = `${attackAllocationSlider.value}%`;
   const human = game.getHuman();
-  if (human) human.troopRatio = val;
-});
-
-attackSlider.addEventListener("input", () => {
-  const val = parseInt(attackSlider.value) / 100;
-  attackLabel.textContent = `${attackSlider.value}%`;
-  const human = game.getHuman();
-  if (human) human.attackIntensity = val;
+  if (human) human.attackAllocation = val;
 });
 
 game.onStateChange = () => {
@@ -337,7 +328,7 @@ function beginCountdown() {
     countdownOverlay.style.display = "none";
     playerStatsEl.style.display = "block";
     controlsPanel.style.display = "flex";
-    tileInfoEl.textContent = "Right-click drag to spin · left-click to select / attack";
+    tileInfoEl.textContent = "Right-click drag to spin · left-click land to expand / enemy to attack";
   };
 
   game.startCountdown();
@@ -407,27 +398,43 @@ canvas.addEventListener("click", (event) => {
   paintTile(globeMesh.geometry, tileIndex, HIGHLIGHT_COLOR);
 
   const human = game.getHuman();
-  if (human && tile.owner !== null && tile.owner !== human.id) {
-    // Toggle: if we're already attacking this tile, cancel; else launch.
-    const alreadyAttacking = human.attacks.some(
-      (a) => a.targetTileIndex === tileIndex
-    );
+  if (!human) return;
+
+  if (tile.owner === human.id) {
+    tileInfoEl.textContent = `Your tile  |  ${tile.terrain.replace("_", " ")}`;
+    return;
+  }
+
+  // Water / non-attackable: info only.
+  if (tile.terrain === "deep_water" || tile.terrain === "shallow_water") {
+    tileInfoEl.textContent =
+      `${tile.terrain.replace("_", " ")}  |  ` +
+      `${tile.latDeg.toFixed(1)}°, ${tile.lonDeg.toFixed(1)}°`;
+    return;
+  }
+
+  // Enemy land: launch or cancel a campaign against that player.
+  if (tile.owner !== null) {
     const target = game.players.find((p) => p.id === tile.owner);
     const targetName = target?.name || "unknown";
-
-    if (alreadyAttacking) {
+    if (game.hasActiveAttackFor(human, tileIndex)) {
       game.cancelAttack(human, tileIndex);
       tileInfoEl.textContent = `Cancelled attack on ${targetName}.`;
     } else if (game.requestAttack(human, tileIndex)) {
       tileInfoEl.textContent = `Attack launched on ${targetName}.`;
     } else {
-      tileInfoEl.textContent = `Can't attack ${targetName} — no adjacent border.`;
+      tileInfoEl.textContent = `Can't attack ${targetName} — no adjacent border or no troops.`;
     }
-  } else if (human && tile.owner === human.id) {
-    tileInfoEl.textContent = `Your tile  |  ${tile.terrain.replace("_", " ")}`;
+    return;
+  }
+
+  // Unclaimed land: launch or cancel an expansion campaign.
+  if (game.hasActiveAttackFor(human, tileIndex)) {
+    game.cancelAttack(human, tileIndex);
+    tileInfoEl.textContent = "Cancelled expansion.";
+  } else if (game.requestExpansion(human, tileIndex)) {
+    tileInfoEl.textContent = "Expansion launched.";
   } else {
-    tileInfoEl.textContent =
-      `${tile.terrain.replace("_", " ")}  |  ` +
-      `${tile.latDeg.toFixed(1)}°, ${tile.lonDeg.toFixed(1)}°`;
+    tileInfoEl.textContent = "Can't expand there — no adjacent border or no troops.";
   }
 });

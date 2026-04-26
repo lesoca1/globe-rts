@@ -4,13 +4,10 @@ import { type GameState } from "./GameState";
 // ─────────────────────────────────────────────
 // AI.ts
 // Simple AI that periodically:
-// - Adjusts sliders based on threat level.
-// - Launches tick-based attacks against the
-//   weakest neighboring enemy's border tiles.
+// - Tunes its per-attack allocation by threat level.
+// - Launches a campaign against its weakest neighbor, or expands into
+//   nearby unclaimed land if no enemy borders exist.
 // ─────────────────────────────────────────────
-
-// Max simultaneous player-vs-player attacks per AI.
-const AI_MAX_PVP_ATTACKS = 3;
 
 export function runAI(game: GameState): void {
   for (const player of game.players) {
@@ -23,33 +20,29 @@ function aiDecide(game: GameState, player: Player): void {
   // Only make strategic decisions every ~2 seconds (8 ticks).
   if (game.tickCount % 8 !== player.id % 8) return;
 
-  // 1. Adjust sliders by threat.
+  // Tune the attack-allocation slider by threat. More threat → bigger
+  // allocations per click so the AI commits decisively.
   const threat = assessThreat(game, player);
   if (threat > 0.5) {
-    player.troopRatio = Math.min(0.9, player.troopRatio + 0.05);
-    player.attackIntensity = Math.min(0.8, player.attackIntensity + 0.05);
+    player.attackAllocation = Math.min(0.8, player.attackAllocation + 0.05);
   } else {
-    player.troopRatio = Math.max(0.4, player.troopRatio - 0.02);
-    player.attackIntensity = Math.max(0.3, player.attackIntensity - 0.02);
+    player.attackAllocation = Math.max(0.3, player.attackAllocation - 0.02);
   }
 
-  // 2. Pick a target and launch attacks against its weakest border tiles.
+  // Pick a target:
+  //   - Weakest neighboring enemy if any, otherwise expand into unclaimed land.
   const targetId = pickTarget(game, player);
-  if (targetId === null) return;
-
-  // How many fresh PvP attacks to launch this decision cycle.
-  const pvpActive = countPvpAttacks(game, player);
-  if (pvpActive >= AI_MAX_PVP_ATTACKS) return;
-
-  const launches = chooseAttackTiles(
-    game,
-    player,
-    targetId,
-    AI_MAX_PVP_ATTACKS - pvpActive
-  );
-  for (const tileIdx of launches) {
-    game.requestAttack(player, tileIdx);
+  if (targetId !== null) {
+    if (player.attacks.some((a) => a.defenderId === targetId)) return;
+    const tileIdx = anyEnemyBorderTile(game, player, targetId);
+    if (tileIdx >= 0) game.requestAttack(player, tileIdx);
+    return;
   }
+
+  // No enemy neighbors — expand if we still have unclaimed neighbors.
+  if (player.attacks.some((a) => a.defenderId === null)) return;
+  const expandIdx = anyUnclaimedNeighbor(game, player);
+  if (expandIdx >= 0) game.requestExpansion(player, expandIdx);
 }
 
 /** How much of our border is shared with enemies? */
@@ -100,49 +93,31 @@ function pickTarget(game: GameState, player: Player): number | null {
   return weakestId;
 }
 
-function countPvpAttacks(game: GameState, player: Player): number {
-  let n = 0;
-  for (const a of player.attacks) {
-    const t = game.tiles[a.targetTileIndex];
-    if (t.owner !== null) n++;
-  }
-  return n;
-}
-
-/**
- * Pick up to `limit` enemy tiles owned by `targetId` adjacent to one of
- * the player's border tiles, preferring tiles with the lowest D_eff
- * (defense × terrain × structure).
- */
-function chooseAttackTiles(
+/** Any tile owned by `targetId` that's adjacent to one of `player`'s borders. */
+function anyEnemyBorderTile(
   game: GameState,
   player: Player,
-  targetId: number,
-  limit: number
-): number[] {
-  if (limit <= 0) return [];
-
-  const seen = new Set<number>();
-  for (const a of player.attacks) seen.add(a.targetTileIndex);
-
-  type Cand = { idx: number; cost: number };
-  const cands: Cand[] = [];
-
+  targetId: number
+): number {
   for (const borderIdx of player.borderTiles) {
     const borderTile = game.tiles[borderIdx];
     for (const nIdx of borderTile.neighbors) {
-      if (seen.has(nIdx)) continue;
-      const n = game.tiles[nIdx];
-      if (n.owner !== targetId) continue;
-      const cost = Math.max(
-        0.01,
-        n.defense * n.terrainDefense * n.structureDefense
-      );
-      cands.push({ idx: nIdx, cost });
-      seen.add(nIdx);
+      if (game.tiles[nIdx].owner === targetId) return nIdx;
     }
   }
+  return -1;
+}
 
-  cands.sort((a, b) => a.cost - b.cost);
-  return cands.slice(0, limit).map((c) => c.idx);
+/** Any unclaimed land tile adjacent to one of `player`'s borders. */
+function anyUnclaimedNeighbor(game: GameState, player: Player): number {
+  for (const borderIdx of player.borderTiles) {
+    const borderTile = game.tiles[borderIdx];
+    for (const nIdx of borderTile.neighbors) {
+      const n = game.tiles[nIdx];
+      if (n.owner !== null) continue;
+      if (n.terrain === "deep_water" || n.terrain === "shallow_water") continue;
+      return nIdx;
+    }
+  }
+  return -1;
 }

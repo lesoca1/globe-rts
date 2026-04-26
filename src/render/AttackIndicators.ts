@@ -6,10 +6,11 @@ import { type Attack } from "../game/Attack";
 
 // ─────────────────────────────────────────────
 // AttackIndicators.ts
-// Renders an arrow + troop-count label for every
-// active player-vs-player attack. Arrows arc from
-// the attacker's border tile up over the globe and
-// down onto the defender's tile.
+// One arrow + label per active player-vs-player
+// campaign. The arrow arcs from the attacker's
+// border to a representative target tile on the
+// shared front; the label shows the troop pool
+// remaining in the campaign.
 // ─────────────────────────────────────────────
 
 const ARROW_SEGMENTS = 24;
@@ -30,7 +31,7 @@ export class AttackIndicators {
   private labelContainer: HTMLDivElement;
   private game: GameState;
   private camera: THREE.PerspectiveCamera;
-  // Keyed by `${attackerId}:${targetIdx}` for stable identity across ticks.
+  // Keyed by `${attackerId}:${defenderId}` for stable identity per campaign.
   private entries = new Map<string, IndicatorEntry>();
   private projected = new THREE.Vector3();
 
@@ -70,7 +71,7 @@ export class AttackIndicators {
       }
     }
 
-    // Drop entries whose attacks ended.
+    // Drop entries whose campaigns ended.
     for (const [key, entry] of this.entries) {
       if (!live.has(key)) this.disposeEntry(entry, key);
     }
@@ -83,14 +84,13 @@ export class AttackIndicators {
 
   // ── Internals ──
 
-  /** Only show indicators for attacks where both sides have an owner. */
+  /** Only show indicators for player-vs-player campaigns. */
   private shouldShow(attack: Attack): boolean {
-    const target = this.game.tiles[attack.targetTileIndex];
-    return target.owner !== null;
+    return attack.defenderId !== null;
   }
 
   private keyFor(player: Player, attack: Attack): string {
-    return `${player.id}:${attack.targetTileIndex}`;
+    return `${player.id}:${attack.defenderId ?? "exp"}`;
   }
 
   private createEntry(player: Player, attack: Attack): IndicatorEntry {
@@ -138,7 +138,7 @@ export class AttackIndicators {
 
   private updateGeometry(entry: IndicatorEntry, _player: Player): void {
     const fromTile = this.game.tiles[entry.attack.fromTileIndex];
-    const toTile = this.game.tiles[entry.attack.targetTileIndex];
+    const toTile = this.game.tiles[entry.attack.toTileIndex];
 
     const start = fromTile.centroid.clone().normalize().multiplyScalar(ARROW_RADIUS);
     const end = toTile.centroid.clone().normalize().multiplyScalar(ARROW_RADIUS);
@@ -176,7 +176,7 @@ export class AttackIndicators {
 
   private updateLabel(entry: IndicatorEntry, player: Player): void {
     const fromTile = this.game.tiles[entry.attack.fromTileIndex];
-    const toTile = this.game.tiles[entry.attack.targetTileIndex];
+    const toTile = this.game.tiles[entry.attack.toTileIndex];
 
     // Place label over the arc midpoint.
     this.projected
@@ -202,10 +202,9 @@ export class AttackIndicators {
     const x = (ndc.x * 0.5 + 0.5) * window.innerWidth;
     const y = (-ndc.y * 0.5 + 0.5) * window.innerHeight;
 
-    // Show committed flow rate (troops/tick) and progress.
-    const flow = entry.attack.flowRate;
-    const pct = Math.floor(entry.attack.progress * 100);
-    entry.label.textContent = `⚔ ${player.name} → ${flow.toFixed(1)}/t · ${pct}%`;
+    // Show the troop pool committed to this campaign.
+    const troops = Math.max(0, Math.floor(entry.attack.troops));
+    entry.label.textContent = `⚔ ${player.name} → ${troops}`;
     entry.label.style.display = "block";
     entry.label.style.opacity = String(Math.min(1, facing * 3));
     entry.label.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
