@@ -1,4 +1,3 @@
-import "./style.css";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createGlobeMesh, GLOBE_RADIUS } from "./globe/GlobeMesh";

@@ -43,6 +43,7 @@ export interface Player {
   // nickname label.
   tileCenterSum: THREE.Vector3;
   spawned: boolean;
+  spawnTileIndex: number | null;
 }
 
 // Predefined player colors — distinct and colorblind-friendly.
@@ -78,13 +79,14 @@ export function createPlayer(
     ownedTiles: new Set(),
     borderTiles: new Set(),
     population: 0,
-    troops: 50,        // starting troops
+    troops: isHuman ? 25_000 : 10_000,
     gold: 0,
-    attackAllocation: 0.5,  // 50% of pop committed per attack click by default
+    attackAllocation: isHuman ? 0.2 : 0.05,
     attacks: [],
     alive: true,
     landTileCount: 0,
     tileCenterSum: new THREE.Vector3(),
     spawned: false,
+    spawnTileIndex: null,
   };
 }
