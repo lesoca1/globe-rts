@@ -122,6 +122,10 @@ const attackLayer = document.getElementById("attack-indicators") as HTMLDivEleme
 const labelMap = new Map<number, HTMLDivElement>();
 const projectedPos = new THREE.Vector3();
 const cameraDir = new THREE.Vector3();
+const ndcPos = new THREE.Vector3();
+let frameCount = 0;
+let lastHudUpdateMs = 0;
+let lastLeaderboardUpdateMs = 0;
 
 const attackIndicators = new AttackIndicators(scene, attackLayer, game, camera);
 
@@ -153,20 +157,20 @@ function updateLabels() {
       .multiplyScalar(GLOBE_RADIUS * 1.005);
 
     // Hide labels on the far hemisphere.
-    const facing = projectedPos.clone().normalize().dot(cameraDir);
+    const facing = projectedPos.normalize().dot(cameraDir);
     if (facing < 0.05) {
       label.style.display = "none";
       continue;
     }
 
-    const ndc = projectedPos.clone().project(camera);
-    if (ndc.z > 1 || ndc.z < -1) {
+    ndcPos.copy(projectedPos).project(camera);
+    if (ndcPos.z > 1 || ndcPos.z < -1) {
       label.style.display = "none";
       continue;
     }
 
-    const x = (ndc.x * 0.5 + 0.5) * window.innerWidth;
-    const y = (-ndc.y * 0.5 + 0.5) * window.innerHeight;
+    const x = (ndcPos.x * 0.5 + 0.5) * window.innerWidth;
+    const y = (-ndcPos.y * 0.5 + 0.5) * window.innerHeight;
     label.style.display = "block";
     label.style.opacity = String(Math.min(1, facing * 3));
     label.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
@@ -183,10 +187,13 @@ function updateLabels() {
 
 function animate() {
   requestAnimationFrame(animate);
+  frameCount++;
   controls.update();
   keyLight.position.copy(camera.position);
-  updateLabels();
-  attackIndicators.update();
+  if (frameCount % 3 === 0) {
+    updateLabels();
+    attackIndicators.update();
+  }
   renderer.render(scene, camera);
 }
 
@@ -269,6 +276,12 @@ game.onStateChange = () => {
   const human = game.getHuman();
   if (!human) return;
 
+  const now = performance.now();
+  if (now - lastHudUpdateMs < 120) {
+    return;
+  }
+  lastHudUpdateMs = now;
+
   const terr = game.getTerritory(human);
   territoryBar.style.width = `${terr}%`;
   territoryPct.textContent = `${terr.toFixed(1)}%`;
@@ -276,23 +289,27 @@ game.onStateChange = () => {
   capValue.textContent = Math.floor(game.maxTroops(human)).toString();
   goldValue.textContent = Math.floor(human.gold).toString();
 
-  const sorted = [...game.players]
-    .filter((p) => p.alive)
-    .sort((a, b) => b.landTileCount - a.landTileCount);
-  const dead = game.players.filter((p) => !p.alive);
+  if (now - lastLeaderboardUpdateMs >= 300) {
+    lastLeaderboardUpdateMs = now;
 
-  leaderboardList.innerHTML = [...sorted, ...dead]
-    .map((p) => {
-      const pct = game.getTerritory(p).toFixed(1);
-      const cls = p.alive ? "" : " lb-dead";
-      const hex = "#" + p.color.getHexString();
-      return `<div class="lb-entry${cls}">
-        <div class="lb-color" style="background:${hex}"></div>
-        <span class="lb-name">${p.name}</span>
-        <span class="lb-pct">${pct}%</span>
-      </div>`;
-    })
-    .join("");
+    const sorted = [...game.players]
+      .filter((p) => p.alive)
+      .sort((a, b) => b.landTileCount - a.landTileCount);
+    const dead = game.players.filter((p) => !p.alive);
+
+    leaderboardList.innerHTML = [...sorted, ...dead]
+      .map((p) => {
+        const pct = game.getTerritory(p).toFixed(1);
+        const cls = p.alive ? "" : " lb-dead";
+        const hex = "#" + p.color.getHexString();
+        return `<div class="lb-entry${cls}">
+          <div class="lb-color" style="background:${hex}"></div>
+          <span class="lb-name">${p.name}</span>
+          <span class="lb-pct">${pct}%</span>
+        </div>`;
+      })
+      .join("");
+  }
 };
 
 game.onVictory = (winner) => {
