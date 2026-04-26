@@ -100,6 +100,12 @@ html, body {
   align-items: center;
 }
 
+.stat-divider {
+  color: #555;
+  font-weight: 400;
+  margin: 0 -2px;
+}
+
 /* ── Bottom bar ── */
 #bottom-bar {
   display: flex;

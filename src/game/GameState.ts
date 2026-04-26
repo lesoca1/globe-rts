@@ -40,10 +40,21 @@ function isAttackableTerrain(terrain: string): boolean {
   return isLand(terrain);
 }
 
-// How fast population grows per owned land tile per tick
-const POP_GROWTH_RATE = 0.015;
-// Gold per worker per tick
-const GOLD_PER_WORKER = 0.02;
+// ── Population growth (logistic) ──
+// Population (= troop pool P) grows toward a territory-derived cap Pmax.
+//   Pmax = kp * N^alpha     (sublinear in territory N, diminishing returns)
+//   dP   = r * (P + beta) * (1 - P / Pmax)
+// `beta` is a small fraction of Pmax that keeps growth from stalling at P=0.
+// Population is updated AFTER all attacks each tick, so newly grown troops
+// can't be spent on attacks until the next tick.
+const POP_KP = 50;
+const POP_ALPHA = 0.6;
+const POP_GROWTH_R = 0.05;
+const POP_BETA_FRACTION = 0.02;
+
+// Gold accrued per owned land tile per tick from the worker fraction
+// (the (1 - troopRatio) side of the slider).
+const GOLD_PER_TILE = 0.05;
 
 const WIN_THRESHOLD = 0.80;  // 80% of land to win
 
@@ -282,38 +293,73 @@ export class GameState {
     if (this.phase !== "playing") return;
     this.tickCount++;
 
-    // 1. Resolve all attacks before population growth.
+    // 1. Resolve all attacks first.
     for (const player of this.players) {
       if (!player.alive) continue;
       this.maintainExpansionAttacks(player);
       this.tickAttacks(player);
     }
 
-    // 2. Population growth & resource generation.
+    // 2. Eliminate players who lost all territory during attack resolution.
+    //    Done before growth so dead players don't accrue troops/gold.
     for (const player of this.players) {
       if (!player.alive) continue;
-
-      const landOwned = player.landTileCount;
-      const growth = landOwned * POP_GROWTH_RATE;
-      player.population += growth;
-
-      const newTroops = growth * player.troopRatio;
-      const newWorkers = growth * (1 - player.troopRatio);
-      player.troops += newTroops;
-      player.gold += newWorkers * GOLD_PER_WORKER;
-
-      // Eliminated when no tiles remain.
       if (player.ownedTiles.size === 0) {
         player.alive = false;
         player.attacks = [];
       }
     }
 
-    // 3. Win check.
+    // 3. Population (troop-pool P) growth — logistic, capped by Pmax.
+    //    Per spec, runs AFTER all attack calculations so troops generated
+    //    this tick cannot be spent on attacks until the next tick.
+    for (const player of this.players) {
+      if (!player.alive) continue;
+      this.tickPopulation(player);
+    }
+
+    // 4. Win check.
     this.checkVictory();
 
-    // 4. Notify UI.
+    // 5. Notify UI.
     this.onStateChange?.();
+  }
+
+  /**
+   * Logistic population growth for one player.
+   *
+   *   Pmax = kp * N^alpha
+   *   beta = beta_frac * Pmax
+   *   dP   = r * (P + beta) * (1 - P / Pmax)
+   *   P    = clamp(P + dP, 0, Pmax)
+   *
+   * `r` is scaled by the player's troopRatio so the slider trades raw
+   * growth speed for gold income from the worker fraction.
+   */
+  private tickPopulation(player: Player): void {
+    const N = player.landTileCount;
+    if (N <= 0) return;
+
+    const pMax = this.maxTroops(player);
+    const beta = POP_BETA_FRACTION * pMax;
+    const fillFactor = Math.max(0, 1 - player.troops / pMax);
+    const r = POP_GROWTH_R * player.troopRatio;
+    const dP = r * (player.troops + beta) * fillFactor;
+
+    player.troops = Math.min(pMax, player.troops + dP);
+
+    // Worker output (the unused fraction of the troopRatio slider) → gold.
+    player.gold += N * (1 - player.troopRatio) * GOLD_PER_TILE;
+
+    // Mirror P into the legacy `population` field so downstream code/UI
+    // that still reads it sees the current troop pool size.
+    player.population = player.troops;
+  }
+
+  /** Pmax — sublinear cap on troop pool from current territory. */
+  maxTroops(player: Player): number {
+    if (player.landTileCount <= 0) return 0;
+    return POP_KP * Math.pow(player.landTileCount, POP_ALPHA);
   }
 
   // ── Attack maintenance ──

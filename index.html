@@ -68,13 +68,11 @@
             <span id="territory-pct" class="stat-value">0%</span>
           </div>
           <div class="stat-row">
-            <div class="stat-compact">
-              <span class="stat-label">Pop</span>
-              <span id="pop-value" class="stat-value">0</span>
-            </div>
-            <div class="stat-compact">
+            <div class="stat-compact" title="Current troop pool / cap (Pmax = kp · N^α)">
               <span class="stat-label">Troops</span>
               <span id="troops-value" class="stat-value">50</span>
+              <span class="stat-divider">/</span>
+              <span id="cap-value" class="stat-value">0</span>
             </div>
             <div class="stat-compact">
               <span class="stat-label">Gold</span>
@@ -88,9 +86,9 @@
       <div id="bottom-bar">
         <div id="controls-panel" class="hud-panel" style="display:none">
           <div class="slider-group">
-            <label>Troops <span id="troop-ratio-label">60%</span></label>
+            <label>Growth <span id="troop-ratio-label">60%</span></label>
             <input type="range" id="troop-ratio" min="10" max="90" value="60" />
-            <span class="slider-hint">Workers ← → Troops</span>
+            <span class="slider-hint">Gold ← → Troops</span>
           </div>
           <div class="slider-group">
             <label>Attack <span id="attack-intensity-label">50%</span></label>
