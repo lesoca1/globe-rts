@@ -27,9 +27,9 @@ export interface Player {
   population: number;
   gold: number;
 
-  // Control sliders (0–1)
-  troopRatio: number;         // what fraction of pop growth goes to troops (vs workers)
-  attackIntensity: number;    // fraction of P committed across all active attacks per tick
+  // Control slider (0–1): fraction of total population committed per attack
+  // click. The growth-vs-gold split is fixed (see GameState.TROOP_RATIO).
+  attackAllocation: number;
 
   // Active tick-based attacks owned by this player.
   attacks: Attack[];
@@ -80,8 +80,7 @@ export function createPlayer(
     population: 0,
     troops: 50,        // starting troops
     gold: 0,
-    troopRatio: 0.6,   // 60% troops, 40% workers by default
-    attackIntensity: 0.5,
+    attackAllocation: 0.5,  // 50% of pop committed per attack click by default
     attacks: [],
     alive: true,
     landTileCount: 0,

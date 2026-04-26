@@ -13,7 +13,7 @@ import {
   KD,
   EPSILON,
   ATTACKER_TERRAIN_MOD,
-  MIN_FLOW_RATE,
+  MIN_FLOW_PER_TARGET,
 } from "./Attack";
 
 // ─────────────────────────────────────────────
@@ -40,6 +40,11 @@ function isAttackableTerrain(terrain: string): boolean {
   return isLand(terrain);
 }
 
+/** Stable key for a (low, high) player-id pair, used to dedupe mutual checks. */
+function pairKey(a: number, b: number): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
 // ── Population growth (logistic) ──
 // Population (= troop pool P) grows toward a territory-derived cap Pmax.
 //   Pmax = kp * N^alpha     (sublinear in territory N, diminishing returns)
@@ -52,8 +57,11 @@ const POP_ALPHA = 0.6;
 const POP_GROWTH_R = 0.05;
 const POP_BETA_FRACTION = 0.02;
 
-// Gold accrued per owned land tile per tick from the worker fraction
-// (the (1 - troopRatio) side of the slider).
+// Fixed troops/worker split. The single in-game slider controls per-attack
+// allocation, not growth speed.
+const TROOP_RATIO = 0.7;
+
+// Gold accrued per owned land tile per tick from the worker fraction.
 const GOLD_PER_TILE = 0.05;
 
 const WIN_THRESHOLD = 0.80;  // 80% of land to win
@@ -65,12 +73,9 @@ const COUNTDOWN_DURATION_MS = 5000;
 // and the floor value when an enemy tile is captured.
 const SPAWN_DEFENSE = 5;
 const BASE_CAPTURE_DEFENSE = 3;
-// Fraction of the attack's committed flow that "garrisons" a captured tile.
-const CAPTURE_GARRISON_FRACTION = 0.5;
-
-// Per-player cap on auto-launched expansion attacks (into unclaimed tiles).
-// Manual / AI-launched player-vs-player attacks are unbounded.
-const MAX_AUTO_EXPANSION_ATTACKS = 6;
+// Per-tile garrison cost taken from the campaign pool when a tile is captured.
+// Keeps successful campaigns from snowballing without paying anything.
+const CAPTURE_GARRISON_COST = 4;
 
 export class GameState {
   tiles: Tile[];
@@ -294,9 +299,13 @@ export class GameState {
     this.tickCount++;
 
     // 1. Resolve all attacks first.
+    //    a. 1:1 cancellation between mutually-attacking pairs (consumes pool
+    //       on both sides without combat).
+    //    b. Per-player tick: prune dead campaigns, then advance combat across
+    //       the current front uniformly.
+    this.applyMutualCancellation();
     for (const player of this.players) {
       if (!player.alive) continue;
-      this.maintainExpansionAttacks(player);
       this.tickAttacks(player);
     }
 
@@ -332,9 +341,6 @@ export class GameState {
    *   beta = beta_frac * Pmax
    *   dP   = r * (P + beta) * (1 - P / Pmax)
    *   P    = clamp(P + dP, 0, Pmax)
-   *
-   * `r` is scaled by the player's troopRatio so the slider trades raw
-   * growth speed for gold income from the worker fraction.
    */
   private tickPopulation(player: Player): void {
     const N = player.landTileCount;
@@ -343,16 +349,15 @@ export class GameState {
     const pMax = this.maxTroops(player);
     const beta = POP_BETA_FRACTION * pMax;
     const fillFactor = Math.max(0, 1 - player.troops / pMax);
-    const r = POP_GROWTH_R * player.troopRatio;
+    const r = POP_GROWTH_R * TROOP_RATIO;
     const dP = r * (player.troops + beta) * fillFactor;
 
     player.troops = Math.min(pMax, player.troops + dP);
 
-    // Worker output (the unused fraction of the troopRatio slider) → gold.
-    player.gold += N * (1 - player.troopRatio) * GOLD_PER_TILE;
+    // Worker output (the non-troop fraction) → gold.
+    player.gold += N * (1 - TROOP_RATIO) * GOLD_PER_TILE;
 
-    // Mirror P into the legacy `population` field so downstream code/UI
-    // that still reads it sees the current troop pool size.
+    // Mirror P into the legacy `population` field for any downstream readers.
     player.population = player.troops;
   }
 
@@ -365,195 +370,294 @@ export class GameState {
   // ── Attack maintenance ──
 
   /**
-   * Top up a player's auto-expansion attacks against unclaimed neighbors.
-   * Player-vs-player attacks are launched explicitly (by click or AI) and
-   * are not managed here.
+   * Apply 1:1 troop cancellation between any pair (A, B) where A is
+   * attacking B and B is attacking A. This drains both pools without doing
+   * any tile combat — the troops meet in the middle and annihilate.
    */
-  private maintainExpansionAttacks(player: Player): void {
-    if (player.borderTiles.size === 0) return;
+  private applyMutualCancellation(): void {
+    const seen = new Set<string>();
+    for (const a of this.players) {
+      if (!a.alive) continue;
+      for (const atk of a.attacks) {
+        if (atk.defenderId === null) continue;
+        const key = pairKey(a.id, atk.defenderId);
+        if (seen.has(key)) continue;
+        seen.add(key);
 
-    // Drop expansion attacks whose targets are no longer unclaimed
-    // (captured already, or captured by someone else).
-    player.attacks = player.attacks.filter((a) => {
-      const t = this.tiles[a.targetTileIndex];
-      // Keep player-vs-player attacks; they're managed elsewhere.
-      if (t.owner !== null) return t.owner !== player.id;
-      // Unclaimed: keep as expansion attack.
-      return true;
-    });
+        const b = this.players.find((p) => p.id === atk.defenderId);
+        if (!b || !b.alive) continue;
+        const counter = b.attacks.find((x) => x.defenderId === a.id);
+        if (!counter) continue;
 
-    let expansionCount = 0;
-    const targetSet = new Set<number>();
-    for (const a of player.attacks) {
-      targetSet.add(a.targetTileIndex);
-      const t = this.tiles[a.targetTileIndex];
-      if (t.owner === null) expansionCount++;
-    }
-
-    if (expansionCount >= MAX_AUTO_EXPANSION_ATTACKS) return;
-
-    // Pick the cheapest unclaimed neighbors to attack.
-    const candidates: { tileIdx: number; fromIdx: number; cost: number }[] = [];
-    for (const borderIdx of player.borderTiles) {
-      const borderTile = this.tiles[borderIdx];
-      for (const nIdx of borderTile.neighbors) {
-        if (targetSet.has(nIdx)) continue;
-        const n = this.tiles[nIdx];
-        if (n.owner !== null) continue;
-        if (!isAttackableTerrain(n.terrain)) continue;
-
-        // Cost score: lower D_eff = cheaper. Unclaimed has D=0 so this is
-        // dominated by the terrain modifier.
-        const dEff = Math.max(EPSILON, n.defense * n.terrainDefense * n.structureDefense);
-        candidates.push({ tileIdx: nIdx, fromIdx: borderIdx, cost: dEff });
+        const canceled = Math.min(atk.troops, counter.troops);
+        atk.troops -= canceled;
+        counter.troops -= canceled;
       }
-    }
-
-    candidates.sort((a, b) => a.cost - b.cost);
-
-    for (const c of candidates) {
-      if (expansionCount >= MAX_AUTO_EXPANSION_ATTACKS) break;
-      if (targetSet.has(c.tileIdx)) continue;
-      // Flow rate is set to a placeholder; tickAttacks redistributes
-      // the player's attack budget across all active attacks.
-      player.attacks.push(createAttack(player.id, c.tileIdx, c.fromIdx, 1));
-      targetSet.add(c.tileIdx);
-      expansionCount++;
     }
   }
 
   /**
-   * Run one tick of all of `player`'s active attacks.
-   * Order per spec:
-   *   1. Drop invalid attacks.
-   *   2. Distribute commitment across all attacks (capped by P).
-   *   3. For each attack: progress, attrition, capture check.
+   * Run one tick of all of `player`'s active campaigns.
+   *   1. Drop campaigns that are out of troops or have no front.
+   *   2. Build the front: every (attackerBorderTile → targetTile) edge
+   *      where targetTile matches the campaign's defender (or is unclaimed
+   *      land for an expansion campaign).
+   *   3. Distribute the troop pool uniformly across each unique target tile
+   *      on the front and resolve combat per target.
    */
   private tickAttacks(player: Player): void {
     if (player.attacks.length === 0) return;
 
-    // 1. Validate targets. Drop attacks whose target is now self-owned
-    //    or whose origin tile is no longer ours.
-    player.attacks = player.attacks.filter((a) => {
-      const target = this.tiles[a.targetTileIndex];
-      if (target.owner === player.id) return false;
-      if (!isAttackableTerrain(target.terrain)) return false;
-      // The origin can be lost mid-attack; in that case re-anchor to any
-      // current border tile that neighbors the target if possible.
-      const fromTile = this.tiles[a.fromTileIndex];
-      if (fromTile.owner !== player.id) {
-        const newFrom = this.findAdjacentBorder(player, a.targetTileIndex);
-        if (newFrom < 0) return false;
-        a.fromTileIndex = newFrom;
-      }
-      return true;
-    });
+    const surviving: Attack[] = [];
 
-    if (player.attacks.length === 0) return;
-
-    // 2. Distribute commitment. Total flow = troops * attackIntensity,
-    //    split evenly across active attacks. Then global cap: total flow
-    //    must not exceed P.
-    const desiredTotal = Math.max(0, player.troops * player.attackIntensity);
-    const perAttack = desiredTotal / player.attacks.length;
-    let totalFlow = 0;
-    for (const a of player.attacks) {
-      a.flowRate = perAttack;
-      totalFlow += a.flowRate;
-    }
-    if (totalFlow > player.troops && totalFlow > 0) {
-      const scale = player.troops / totalFlow;
-      for (const a of player.attacks) a.flowRate *= scale;
-      totalFlow = player.troops;
-    }
-
-    // 3. Process each attack.
-    const completed: Attack[] = [];
     for (const attack of player.attacks) {
-      const tile = this.tiles[attack.targetTileIndex];
-      const ra = attack.flowRate;
+      if (attack.troops <= 0) continue;
 
-      if (ra < MIN_FLOW_RATE) {
-        // Too weak to register; progress decays.
-        attack.progress = Math.max(0, attack.progress - KC);
+      // Build the front: target tiles adjacent to the attacker's territory.
+      const front = this.computeFront(player, attack);
+      if (front.targets.size === 0) {
+        // No reachable front anymore — campaign ends, leftover troops are
+        // returned to the player's main pool.
+        player.troops = Math.min(this.maxTroops(player), player.troops + attack.troops);
         continue;
       }
 
-      // Effective attack & defense.
-      const aEff = ra * ATTACKER_TERRAIN_MOD;
-      const dEff = Math.max(
-        EPSILON,
-        tile.defense * tile.terrainDefense * tile.structureDefense
-      );
-
-      // Net pressure & progress change.
-      const delta = aEff - dEff;
-      const dC = KC * (delta / dEff);
-      attack.progress = Math.max(0, attack.progress + dC);
-
-      // Attacker attrition (continuous troop drain).
-      player.troops = Math.max(0, player.troops - KL * aEff);
-
-      // Defender attrition.
-      tile.defense = Math.max(0, tile.defense - KD * aEff);
-
-      // Capture check.
-      if (attack.progress >= 1) {
-        this.captureTile(player, attack);
-        completed.push(attack);
+      // Drop progress for tiles that left the front (e.g. captured by a
+      // third party) so the map doesn't grow unbounded.
+      for (const tIdx of attack.progress.keys()) {
+        if (!front.targets.has(tIdx)) attack.progress.delete(tIdx);
       }
+
+      // Refresh rendering anchors.
+      attack.fromTileIndex = front.representativeFrom;
+      attack.toTileIndex = front.representativeTo;
+
+      const numTargets = front.targets.size;
+      const perTarget = attack.troops / numTargets;
+
+      if (perTarget < MIN_FLOW_PER_TARGET) {
+        // Spread too thin to make any progress this tick — keep the campaign
+        // alive but skip combat. Without enemy reinforcement it'll bleed via
+        // mutual cancellation or be reset by the player.
+        surviving.push(attack);
+        continue;
+      }
+
+      const captured: number[] = [];
+      for (const tIdx of front.targets) {
+        if (attack.troops <= 0) break;
+        const tile = this.tiles[tIdx];
+
+        const aEff = perTarget * ATTACKER_TERRAIN_MOD;
+        const dEff = Math.max(
+          EPSILON,
+          tile.defense * tile.terrainDefense * tile.structureDefense
+        );
+
+        const dC = KC * ((aEff - dEff) / dEff);
+        const prev = attack.progress.get(tIdx) ?? 0;
+        const next = Math.max(0, prev + dC);
+        attack.progress.set(tIdx, next);
+
+        // Attacker attrition: troops drained from the campaign pool.
+        attack.troops = Math.max(0, attack.troops - KL * aEff);
+        // Defender attrition: defense chipped on the target tile.
+        tile.defense = Math.max(0, tile.defense - KD * aEff);
+
+        if (next >= 1) captured.push(tIdx);
+      }
+
+      // Resolve captures after the loop so we don't mutate the front mid-pass.
+      for (const tIdx of captured) {
+        if (attack.troops < CAPTURE_GARRISON_COST) {
+          attack.progress.delete(tIdx);
+          continue;
+        }
+        attack.troops -= CAPTURE_GARRISON_COST;
+        this.captureTile(player, tIdx, CAPTURE_GARRISON_COST);
+        attack.progress.delete(tIdx);
+      }
+
+      if (attack.troops > 0) surviving.push(attack);
     }
 
-    if (completed.length > 0) {
-      const set = new Set(completed);
-      player.attacks = player.attacks.filter((a) => !set.has(a));
-    }
+    player.attacks = surviving;
   }
 
   /**
-   * Public entrypoint to launch a directed attack against an enemy or
-   * unclaimed tile. Returns true if the attack was queued.
+   * Build the current attack front for a campaign: every target tile that
+   * is (a) adjacent to one of the attacker's owned tiles and (b) matches
+   * the campaign's filter (specific defender, or unclaimed land for an
+   * expansion campaign).
+   */
+  private computeFront(
+    player: Player,
+    attack: Attack
+  ): { targets: Set<number>; representativeFrom: number; representativeTo: number } {
+    const targets = new Set<number>();
+    let representativeFrom = attack.fromTileIndex;
+    let representativeTo = attack.toTileIndex;
+    let foundAnchor = false;
+
+    for (const borderIdx of player.borderTiles) {
+      const borderTile = this.tiles[borderIdx];
+      for (const nIdx of borderTile.neighbors) {
+        const n = this.tiles[nIdx];
+        if (!isAttackableTerrain(n.terrain)) continue;
+
+        if (attack.defenderId === null) {
+          if (n.owner !== null) continue;
+        } else {
+          if (n.owner !== attack.defenderId) continue;
+        }
+
+        if (!targets.has(nIdx)) {
+          targets.add(nIdx);
+          if (!foundAnchor) {
+            representativeFrom = borderIdx;
+            representativeTo = nIdx;
+            foundAnchor = true;
+          }
+        }
+      }
+    }
+
+    return { targets, representativeFrom, representativeTo };
+  }
+
+  /**
+   * Public entrypoint to launch a directed attack on an enemy player.
+   * `targetTileIdx` is the tile the player clicked; the campaign targets
+   * that tile's owner (so it spreads along the entire shared border).
    */
   requestAttack(attacker: Player, targetTileIdx: number): boolean {
     if (!attacker.alive) return false;
     const tile = this.tiles[targetTileIdx];
     if (!isAttackableTerrain(tile.terrain)) return false;
     if (tile.owner === attacker.id) return false;
+    if (tile.owner === null) return this.requestExpansion(attacker, targetTileIdx);
 
-    // Must have a border tile adjacent to the target.
-    const fromIdx = this.findAdjacentBorder(attacker, targetTileIdx);
-    if (fromIdx < 0) return false;
+    const defenderId = tile.owner;
 
-    // De-dupe: if already attacking this tile, do nothing.
-    for (const a of attacker.attacks) {
-      if (a.targetTileIndex === targetTileIdx) return false;
-    }
+    // Must share a border with the defender somewhere.
+    const anchor = this.findBorderAnchor(attacker, defenderId, targetTileIdx);
+    if (!anchor) return false;
 
-    attacker.attacks.push(createAttack(attacker.id, targetTileIdx, fromIdx, 1));
+    // De-dupe: at most one campaign per (attacker → defender).
+    if (attacker.attacks.some((a) => a.defenderId === defenderId)) return false;
+
+    const allocation = this.consumeAllocation(attacker);
+    if (allocation <= 0) return false;
+
+    attacker.attacks.push(
+      createAttack(attacker.id, defenderId, anchor.from, anchor.to, allocation)
+    );
     return true;
   }
 
-  /** Cancel any active attack a player has on the given target tile. */
-  cancelAttack(attacker: Player, targetTileIdx: number): boolean {
-    const before = attacker.attacks.length;
-    attacker.attacks = attacker.attacks.filter(
-      (a) => a.targetTileIndex !== targetTileIdx
+  /**
+   * Public entrypoint to launch an expansion into unclaimed land.
+   * Spreads uniformly outward from every border tile that touches unclaimed
+   * land — the clicked tile is just the trigger.
+   */
+  requestExpansion(attacker: Player, targetTileIdx: number): boolean {
+    if (!attacker.alive) return false;
+    const tile = this.tiles[targetTileIdx];
+    if (!isAttackableTerrain(tile.terrain)) return false;
+    if (tile.owner !== null) return false;
+
+    const anchor = this.findBorderAnchor(attacker, null, targetTileIdx);
+    if (!anchor) return false;
+
+    if (attacker.attacks.some((a) => a.defenderId === null)) return false;
+
+    const allocation = this.consumeAllocation(attacker);
+    if (allocation <= 0) return false;
+
+    attacker.attacks.push(
+      createAttack(attacker.id, null, anchor.from, anchor.to, allocation)
     );
-    return attacker.attacks.length < before;
+    return true;
   }
 
-  /** Find one of `player`'s border tiles that's adjacent to `targetIdx`. */
-  private findAdjacentBorder(player: Player, targetIdx: number): number {
-    const target = this.tiles[targetIdx];
-    for (const nIdx of target.neighbors) {
-      if (this.tiles[nIdx].owner === player.id) return nIdx;
+  /**
+   * Cancel any active campaign by `attacker` against the same target type
+   * the clicked tile represents (defender player, or expansion). Refunds
+   * any unspent troops to the player's pool.
+   */
+  cancelAttack(attacker: Player, targetTileIdx: number): boolean {
+    const tile = this.tiles[targetTileIdx];
+    const defenderId = tile.owner; // number | null
+    let canceled = false;
+    attacker.attacks = attacker.attacks.filter((a) => {
+      if (a.defenderId !== defenderId) return true;
+      attacker.troops = Math.min(
+        this.maxTroops(attacker),
+        attacker.troops + Math.max(0, a.troops)
+      );
+      canceled = true;
+      return false;
+    });
+    return canceled;
+  }
+
+  /** True if `attacker` currently has a campaign matching the clicked tile. */
+  hasActiveAttackFor(attacker: Player, targetTileIdx: number): boolean {
+    const tile = this.tiles[targetTileIdx];
+    const defenderId = tile.owner;
+    return attacker.attacks.some((a) => a.defenderId === defenderId);
+  }
+
+  /**
+   * Withdraw the per-click allocation from the player's troop pool. Returns
+   * the actual amount withdrawn (capped by current troops).
+   */
+  private consumeAllocation(attacker: Player): number {
+    const want = attacker.troops * attacker.attackAllocation;
+    const got = Math.max(0, Math.min(attacker.troops, want));
+    attacker.troops -= got;
+    return got;
+  }
+
+  /**
+   * Find a border anchor pair (attacker tile, target tile) for a campaign.
+   * Prefers the clicked tile if it's on the front; otherwise picks any
+   * adjacent attacker/target pair. Returns null if no front exists.
+   */
+  private findBorderAnchor(
+    attacker: Player,
+    defenderId: number | null,
+    clickedTileIdx: number
+  ): { from: number; to: number } | null {
+    const clicked = this.tiles[clickedTileIdx];
+    const matchesDefender = (idx: number): boolean => {
+      const t = this.tiles[idx];
+      if (defenderId === null) return t.owner === null && isAttackableTerrain(t.terrain);
+      return t.owner === defenderId && isAttackableTerrain(t.terrain);
+    };
+
+    // Prefer the clicked tile if it's directly on the front.
+    if (matchesDefender(clickedTileIdx)) {
+      for (const nIdx of clicked.neighbors) {
+        if (this.tiles[nIdx].owner === attacker.id) {
+          return { from: nIdx, to: clickedTileIdx };
+        }
+      }
     }
-    return -1;
+
+    // Otherwise pick any matching (border, target) pair.
+    for (const borderIdx of attacker.borderTiles) {
+      const borderTile = this.tiles[borderIdx];
+      for (const nIdx of borderTile.neighbors) {
+        if (matchesDefender(nIdx)) return { from: borderIdx, to: nIdx };
+      }
+    }
+    return null;
   }
 
-  /** Resolve a successful capture of the attack's target tile. */
-  private captureTile(attacker: Player, attack: Attack): void {
-    const tile = this.tiles[attack.targetTileIndex];
+  /** Resolve a successful capture of `tileIdx` by `attacker`. */
+  private captureTile(attacker: Player, tileIdx: number, garrison: number): void {
+    const tile = this.tiles[tileIdx];
     const previousOwner =
       tile.owner !== null
         ? this.players.find((p) => p.id === tile.owner) ?? null
@@ -563,10 +667,7 @@ export class GameState {
       this.releaseTile(previousOwner, tile.index);
     }
 
-    const newDefense = Math.max(
-      BASE_CAPTURE_DEFENSE,
-      attack.flowRate * CAPTURE_GARRISON_FRACTION
-    );
+    const newDefense = Math.max(BASE_CAPTURE_DEFENSE, garrison);
     this.claimTile(attacker, tile.index, newDefense);
 
     this.updateBorderTiles(attacker);

@@ -1,72 +1,75 @@
 // ─────────────────────────────────────────────
 // Attack.ts
-// A persistent, tick-based attack object. Each
-// active attack has a committed troop flow rate
-// (ra) and a capture progress (C in [0, 1]).
-// Per tick the attack consumes attacker troops,
-// chips away at the target tile's defense, and
-// advances or regresses progress depending on
-// the balance of effective attack vs effective
-// defense. When C reaches 1 the tile flips.
+// A persistent, click-spawned campaign. Each
+// active attack carries a finite pool of troops
+// that the player allocated at click time. Per
+// tick the troops are spread uniformly across
+// the current front (every target tile adjacent
+// to the attacker's territory) and grind down
+// defenses until the front is consumed or the
+// pool runs out.
 // ─────────────────────────────────────────────
 
 export interface Attack {
   // Player ID of the attacker.
   attackerId: number;
 
-  // Target tile index.
-  targetTileIndex: number;
+  // Target player ID, or null when this is an expansion into unclaimed land.
+  // An attacker has at most one Attack per (defenderId | null).
+  defenderId: number | null;
 
-  // ra — committed troop flow rate (troops / tick).
-  // May be scaled down each tick if the player can't
-  // sustain the total commitment across all attacks.
-  flowRate: number;
+  // Remaining pool of troops allocated to this campaign. Drained by combat
+  // attrition and by 1:1 cancellation against an opposing attack.
+  troops: number;
 
-  // C — capture progress in [0, 1]. Reaching 1 captures.
-  progress: number;
+  // Per-target-tile capture progress in [0, 1]. Tiles that aren't currently
+  // on the front aren't tracked.
+  progress: Map<number, number>;
 
-  // The attacker's border tile this attack originates
-  // from. Used purely for rendering an indicator arrow.
+  // Cached for rendering: a representative attacker border tile and a
+  // representative target tile on the current front. Recomputed each tick.
   fromTileIndex: number;
+  toTileIndex: number;
 }
 
 // ── Tuning constants ──
 
-// kc — capture-progress coefficient. Controls how fast
-// progress moves per tick relative to the (Δ / D_eff) ratio.
+// kc — capture-progress coefficient. Controls how fast progress moves per
+// tick relative to the (Δ / D_eff) ratio.
 export const KC = 0.04;
 
-// kl — attacker attrition coefficient. Fraction of A_eff
-// removed from the attacker's troop pool per tick.
+// kl — attacker attrition coefficient. Fraction of A_eff drained from the
+// campaign's troop pool per tick per engaged target.
 export const KL = 0.05;
 
-// kd — defender attrition coefficient. Fraction of A_eff
-// chipped off the tile's defense per tick.
+// kd — defender attrition coefficient. Fraction of A_eff chipped off the
+// target tile's defense per tick.
 export const KD = 0.10;
 
-// Small epsilon to keep the progress formula well-defined
-// when attacking tiles with effectively no defense.
+// Small epsilon to keep the progress formula well-defined when attacking
+// tiles with effectively no defense.
 export const EPSILON = 0.5;
 
-// Ta — attacker terrain modifier. Reserved for future use
-// (e.g. cavalry on plains); currently always 1.0.
+// Ta — attacker terrain modifier. Reserved for future use; currently 1.0.
 export const ATTACKER_TERRAIN_MOD = 1.0;
 
-// Below this commitment per tick, an attack is too weak
-// to register and is dropped to free up its slot.
-export const MIN_FLOW_RATE = 0.05;
+// Below this allocation per engaged target, a campaign can't make progress
+// and is dropped to free up its slot.
+export const MIN_FLOW_PER_TARGET = 0.05;
 
 export function createAttack(
   attackerId: number,
-  targetTileIndex: number,
+  defenderId: number | null,
   fromTileIndex: number,
-  flowRate: number
+  toTileIndex: number,
+  troops: number
 ): Attack {
   return {
     attackerId,
-    targetTileIndex,
+    defenderId,
+    troops,
+    progress: new Map(),
     fromTileIndex,
-    flowRate,
-    progress: 0,
+    toTileIndex,
   };
 }
