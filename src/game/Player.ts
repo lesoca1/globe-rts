@@ -20,8 +20,11 @@ export interface Player {
   borderTiles: Set<number>;   // owned tiles adjacent to non-owned tiles
 
   // Resources
+  // P — total troop pool. Grown logistically per tick toward Pmax (a
+  // function of territory size N). The legacy `population` field is
+  // kept as a mirror of `troops` for backwards-compatible reads.
+  troops: number;
   population: number;
-  troops: number;             // P — total troop pool
   gold: number;
 
   // Control sliders (0–1)

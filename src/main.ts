@@ -249,8 +249,8 @@ const leaderboardEl = document.getElementById("leaderboard")!;
 const leaderboardList = document.getElementById("leaderboard-list")!;
 const territoryBar = document.getElementById("territory-bar")!;
 const territoryPct = document.getElementById("territory-pct")!;
-const popValue = document.getElementById("pop-value")!;
 const troopsValue = document.getElementById("troops-value")!;
+const capValue = document.getElementById("cap-value")!;
 const goldValue = document.getElementById("gold-value")!;
 const troopRatioSlider = document.getElementById("troop-ratio") as HTMLInputElement;
 const troopRatioLabel = document.getElementById("troop-ratio-label")!;
@@ -282,8 +282,8 @@ game.onStateChange = () => {
   const terr = game.getTerritory(human);
   territoryBar.style.width = `${terr}%`;
   territoryPct.textContent = `${terr.toFixed(1)}%`;
-  popValue.textContent = Math.floor(human.population).toString();
   troopsValue.textContent = Math.floor(human.troops).toString();
+  capValue.textContent = Math.floor(game.maxTroops(human)).toString();
   goldValue.textContent = Math.floor(human.gold).toString();
 
   const sorted = [...game.players]
